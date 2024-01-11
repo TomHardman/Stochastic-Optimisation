@@ -8,38 +8,49 @@ from keanes_bump import keanes_bump_ts
 
 
 class STM():
-    def __init__(self, N):
+    def __init__(self, N, D):
         self.N = N
-        self.STM_queue = deque([None for _ in range(self.N)])
+        self.STM_queue = deque([np.full(D, np.inf) for _ in range(self.N)])
     
     def update(self, x):
         self.STM_queue.popleft() # remove oldest solution
         self.STM_queue.append(x) # add new solution to queue
     
     def __contains__(self, x):
-        return x in self.STM_queue
+        for point in self.STM_queue:
+           if (x == point).all():
+              return True
+        return False
     
 
 class MTM():
     def __init__(self, M):
         self.M = M
-        self.MTM_heap = [] # implement min-heap to store solutions
-        heapify(self.MTM_heap)
+        self.MTM_arr =[]
     
     def update(self, x, obj):
-        if len(self.MTM_heap) < self.M:
-            self.MTM_heap.heappush((obj, x))
+        if len(self.MTM_arr) < self.M:
+            self.MTM_arr.append((obj, x))
         
         else:
-            if obj > self.MTM_heap[0][0]: # if solution being considered better than M-th best
+            # if solution being considered better than M-th best
+            self.MTM_arr = sorted(self.MTM_arr, reverse=True, key=lambda x:x[0])
+            if obj > self.MTM_arr[-1][0]:
                 # add solution to MTM and remove worst solution in MTM
-                self.MTM_heap.heappop
-                self.MTM_heap.heappush((obj, x))
+                print(self.MTM_arr)
+                self.MTM_arr.pop()
+                self.MTM_arr.append((obj, x))
     
     def get_mean(self):
-        x_arr = np.array([pair[1] for pair in self.MTM_heap])
-        mean_x = np.mean(x_arr, axis=1)
+        x_arr = np.array([pair[1] for pair in self.MTM_arr])
+        mean_x = np.mean(x_arr, axis=0)
         return mean_x
+    
+    def contains(self, x):
+        for pair in self.MTM_arr:
+           if (x == pair[1]).all():
+              return True
+        return False
 
 
 class LTM():
@@ -121,7 +132,7 @@ class TabuSearch():
         self.reduce_factor = reduce_factor
 
         self.MTM = MTM(M)
-        self.STM = STM(N)
+        self.STM = STM(N, D)
         self.LTM = LTM(var_bound, n_cells)
         self.solutions = []
         self.best_solutions = []
@@ -142,10 +153,11 @@ class TabuSearch():
         self.update_memories(base, current_obj)
         self.best_obj = current_obj
         self.best_x = base
-        self.best_solutions.append(self.best_x, self.best_obj)
-        self.solutions.append(base, current_obj)
+        self.best_solutions.append((self.best_x, self.best_obj))
+        self.solutions.append((base, current_obj))
 
         while self.eval_count < 10000:
+            print('Iterations: ', self.n_iter, 'Step Size: ', self.step_size)
             next_base, next_obj = self.local_search(base, current_obj)
             self.n_iter += 1
             self.update_memories(next_base, next_obj)
@@ -155,20 +167,23 @@ class TabuSearch():
                 pattern = next_base - base
                 suc_base = next_base + pattern 
                 
-                if suc_base not in self.STM_set and\
-                self.valid(suc_base): # if move valid
+                if suc_base not in self.STM and self.valid(suc_base): # if move valid
                     suc_obj = self.f(suc_base)
                     self.eval_count += 1
 
-                # if pattern move doesn't improve objective function
-                if suc_obj < next_obj: # reject pattern move
+                    # if pattern move doesn't improve objective function
+                    if suc_obj < next_obj: # reject pattern move
+                        base = next_base.copy()
+                        current_obj = next_obj
+                
+                    else: # accept pattern move
+                        base = suc_base.copy()
+                        current_obj = suc_obj
+                        self.update_memories(suc_base, suc_obj)
+                
+                else:
                     base = next_base.copy()
                     current_obj = next_obj
-                
-                else: # accept pattern move
-                    base = suc_base.copy()
-                    current_obj = suc_obj
-                    self.update_memories(suc_base, suc_obj)
             
             else:
                 base = next_base.copy()
@@ -179,13 +194,13 @@ class TabuSearch():
                 counter += 1
 
                 if counter == self.i_count:
-                    base = self.MTM.get_mean() # intensify search
+                    base = self.MTM.get_mean().copy() # intensify search
                     current_obj = self.f(base)
                     self.eval_count += 1
                     self.update_memories(base, current_obj)
                 
                 if counter == self.d_count:
-                    base = self.LTM.generate_new_solution # diversify search
+                    base = self.LTM.generate_new_solution().copy() # diversify search
                     current_obj = self.f(base)
                     self.eval_count += 1
                     self.update_memories(base, current_obj)
@@ -196,11 +211,11 @@ class TabuSearch():
             
             else:
                 self.best_obj = current_obj
-                self.best_x = base
+                self.best_x = base.copy()
             
             # Report best solution
-            self.best_solutions.append(self.best_x, self.best_obj)
-            self.solutions.append(base, current_obj)
+            self.best_solutions.append((self.best_x, self.best_obj))
+            self.solutions.append((base, current_obj))
  
     def update_memories(self, x, obj):
         self.STM.update(x)
@@ -209,7 +224,7 @@ class TabuSearch():
         self.solutions.append((x, obj))
     
     def valid(self, x):
-        return all([x[i] >= self.varbound[i][0] and x[i] <= self.varbound[i][1] 
+        return all([x[i] >= self.var_bound[i][0] and x[i] <= self.var_bound[i][1] 
                     for i in range(self.D)])
     
     def local_search(self, base, current_obj):
@@ -226,20 +241,19 @@ class TabuSearch():
     def search_along_axes(self, base, axes):
         best_obj = -np.inf
         best_x = None
-
         for ax in axes:
             next_x = base.copy()
             for step in [self.step_size, -2*self.step_size]:
                 next_x[ax] += step
 
-                if next_x not in self.STM: # if not tabu
+                if next_x not in self.STM and self.valid(next_x): # if valid move
                     next_obj = self.f(next_x)
                     self.eval_count += 1
                     
                     if next_obj > best_obj:
-                        best_x = next_x
+                        best_x = next_x.copy()
                         best_obj = next_obj
-        
+
         return best_x, best_obj
 
     def exhaustive_search(self, base):
@@ -304,13 +318,13 @@ class TabuSearch():
         
 
 if __name__ == '__main__':
-    D=2
+    D=8
     varbound=np.array([[0,10]]*D)
     f = keanes_bump_ts
-    tabu_optimiser = TabuSearch(f, 'exhaustive', D, varbound, N=7, M=4, 
+    tabu_optimiser = TabuSearch(f, 'random_subset', D, varbound, N=7, M=4, 
                            intensify=10, diversify=15, reduce=25, subset_size=4, 
-                           prioritisation_period=10, initial_step_size=0.5, 
-                           reduce_factor=2, n_cells=2)
+                           prioritisation_period=10, initial_step_size=2, 
+                           reduce_factor=0.8, n_cells=3)
     tabu_optimiser.run()
     tabu_optimiser.plot_best_evolution()
 
