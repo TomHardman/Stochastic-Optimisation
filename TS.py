@@ -2,12 +2,29 @@ from collections import deque
 from itertools import product
 import numpy as np
 import matplotlib.pyplot as plt
+from util import *
 import random
-from heapq import *
-from keanes_bump import keanes_bump_ts
 
 
 class STM():
+    '''
+    Class that implements the short term memory for the Tabu Search
+
+    Parameters
+    ------------
+    N: no. of points to be stored in memory
+    D: no. of dimensions of optimisation problem
+
+    Methods
+    ------------
+    update(self, x):
+        Updates the STM by removing oldest solution and adding
+        newest
+    
+    __contains__(self, x):
+        Returns True if point x is in short term memory. False
+        Otherwise
+    '''
     def __init__(self, N, D):
         self.N = N
         self.STM_queue = deque([np.full(D, np.inf) for _ in range(self.N)])
@@ -24,6 +41,27 @@ class STM():
     
 
 class MTM():
+    '''
+    Class that implements the medium term memory for the Tabu Search
+
+    Parameters
+    ------------
+    M: no. of points to be stored in memory
+
+    Methods
+    ------------
+    update(self, x):
+        Updates the STM by removing M-th best solution and adding
+        current if current better solution is
+    
+    get_mean(x):
+        Returns the mean location of all the points currently
+        in the medium term memory. Used during search diversification
+    
+    contains(self, x):
+        Returns True if point x is in medium term memory. False
+        Otherwise
+    '''
     def __init__(self, M):
         self.M = M
         self.MTM_arr =[]
@@ -37,7 +75,6 @@ class MTM():
             self.MTM_arr = sorted(self.MTM_arr, reverse=True, key=lambda x:x[0])
             if obj > self.MTM_arr[-1][0]:
                 # add solution to MTM and remove worst solution in MTM
-                print(self.MTM_arr)
                 self.MTM_arr.pop()
                 self.MTM_arr.append((obj, x))
     
@@ -54,11 +91,44 @@ class MTM():
 
 
 class LTM():
+    '''
+    Class that implements the long term memory for the Tabu Search
+
+    Parameters
+    ------------
+    varbound: array like, 2D array of bounds for each variable that
+              defines the search space of form: 
+              [[start_x1, stop_x1], [start_x2, stop_x2]...]
+
+    n_cells: the number of discrete cells to split each axis into
+             for discretisation of the search space
+
+    Methods
+    ------------
+    global_to_grid(self, x): 
+        converts global co-ordinates to grid co-ordinates
+    
+    grid_to_random_global(self, x):
+        converts grid co-ordinates to a global co-ordinate randomly
+        and uniformly sampled from within the bounds of the grid cell
+    
+    update(self, x):
+        updates the LTM for a successfully visited point x
+    
+    generate_new_solution(self ,x):
+        randomly choose a grid cell from set of unvisited regions
+        or least visited regions in case all regions have been visited
+        at least once
+    
+    generate_all_solutions(self):
+        generates a set of grid co-ordinates for all grid cells in
+        the search space
+    '''
     def __init__(self, varbound, n_cells):
         self.varbound = varbound
         self.D = len(varbound)
         self.n_cells = n_cells
-        self.coords_set = self.generate_all_coords() # set of all possible grid co-ords
+        self.unvisited_cells = self.generate_all_coords() # set of all possible grid co-ords
         self.tallies = {} # tallies of no. times each grid region is visited
          
     def global_to_grid(self, x): # converts global co-ordinates to grid-coordinates
@@ -86,8 +156,9 @@ class LTM():
     def update(self, x):
         grid = self.global_to_grid(x)
         grid = tuple(grid.astype(int))
-        if grid in self.coords_set:
-            self.coords_set.discard(grid)
+        
+        if grid in self.unvisited_cells:
+            self.unvisited_cells.discard(grid)
             self.tallies[grid] = 1
 
         else:
@@ -95,9 +166,11 @@ class LTM():
     
     def generate_new_solution(self):
         # try to randomly generate solution from set of unvisited regions
-        if self.coords_set:
-            grid_coord = np.array(random.choice(list(self.coords_set)))
+        if self.unvisited_cells:
+            grid_coord = np.array(random.choice(list(self.unvisited_cells)))
         
+        # if all regions have been visited
+        # chose least-visited region
         else:
             sorted_regions = sorted(self.tallies, key=self.tallies.get)
             grid_coord=np.array(sorted_regions[0])
@@ -112,34 +185,59 @@ class LTM():
 
 
 class TabuSearch():
-    def __init__(self, f, search_method, D, var_bound, N=7, M=4, 
-                 intensify=10, diversify=15, reduce=25, subset_size=4, 
-                 prioritisation_period=10, initial_step_size=0.5, 
-                 reduce_factor=2, n_cells=2):
+    def __init__(self, f, D, var_bound, random_seed=None,
+                 algo_param = {'search_method': 'exhaustive', 
+                              'N': 7,
+                              'M': 4, 
+                              'i_count': 10,
+                              'd_count': 15,
+                              'r_count': 25,
+                              'subset_size': 4,
+                              'prioritisation_period': 10,
+                              'initial_step_size': 1,
+                              'reduce_factor': 0.8,
+                              'n_cells': 3}):
         
-        self.N = N
-        self.M = M
+        # check valid search method has been provided
+        search_method = algo_param['search_method']
+        valid_methods = ['exhaustive', 'random_subset', 'successive_random_subset',
+                         'variable_prioritisation']
+        assert(search_method in valid_methods),\
+            '{} is not a valid search method, valid methods are: {}'.format(search_method, 
+                                                                            valid_methods)
+        # check no. dimensions is consistent
+        assert(len(var_bound) == D),\
+            'var_bound must be of length D, D={}'.format(D)
+        
+        # set random_seed
+        if random_seed:
+            np.random.seed(random_seed)
+            random.seed(random_seed)
+        
+        self.N = algo_param['N']
+        self.M = algo_param['M']
         self.D = D
-        self.i_count=intensify
-        self.d_count=diversify
-        self.r_count=reduce
+        self.i_count=algo_param['i_count']
+        self.d_count=algo_param['d_count']
+        self.r_count=algo_param['r_count']
         self.var_bound = var_bound
         self.f = f
 
-        self.subset_size = subset_size
+        self.subset_size = algo_param['subset_size']
         self.search_method = search_method
-        self.prioritisation_period = prioritisation_period
-        self.reduce_factor = reduce_factor
+        self.prioritisation_period = algo_param['prioritisation_period']
+        self.reduce_factor = algo_param['reduce_factor']
+        self.n_cells = algo_param['n_cells']
 
-        self.MTM = MTM(M)
-        self.STM = STM(N, D)
-        self.LTM = LTM(var_bound, n_cells)
+        self.MTM = MTM(self.M)
+        self.STM = STM(self.N, D)
+        self.LTM = LTM(var_bound, self.n_cells)
         self.solutions = []
         self.best_solutions = []
 
         self.eval_count = 0
         self.n_iter = 0
-        self.step_size = initial_step_size
+        self.step_size = algo_param['initial_step_size']
         self.best_obj = -np.inf
 
     def run(self):
@@ -157,7 +255,6 @@ class TabuSearch():
         self.solutions.append((base, current_obj))
 
         while self.eval_count < 10000:
-            print('Iterations: ', self.n_iter, 'Step Size: ', self.step_size)
             next_base, next_obj = self.local_search(base, current_obj)
             self.n_iter += 1
             self.update_memories(next_base, next_obj)
@@ -235,12 +332,12 @@ class TabuSearch():
         elif self.search_method == 'successive_random_subset':
             next_base, next_obj = self.successive_rss(base, current_obj)
         else:
-            next_base, next_obj = self.variable_prioritsation_search(base)
+            next_base, next_obj = self.variable_prioritisation_search(base)
         return next_base, next_obj
 
     def search_along_axes(self, base, axes):
         best_obj = -np.inf
-        best_x = None
+        best_x = base
         for ax in axes:
             next_x = base.copy()
             for step in [self.step_size, -2*self.step_size]:
@@ -253,7 +350,7 @@ class TabuSearch():
                     if next_obj > best_obj:
                         best_x = next_x.copy()
                         best_obj = next_obj
-
+    
         return best_x, best_obj
 
     def exhaustive_search(self, base):
@@ -270,7 +367,7 @@ class TabuSearch():
         axes_set = set(range(0, self.D))
         best_obj = -np.inf
         
-        while current_obj - best_obj <= 0 and axes_set:
+        while current_obj - best_obj >= 0 and axes_set:
             if len(axes_set) >= self.subset_size:
                 axes = random.sample(list(axes_set), self.subset_size)
             else:
@@ -286,7 +383,7 @@ class TabuSearch():
         
         return best_x, best_obj
             
-    def variable_prioritsation_search(self, base):
+    def variable_prioritisation_search(self, base):
         if self.n_iter % self.prioritisation_period == 0:
             axes = range(0, self.D)
             sensitivities = []
@@ -312,21 +409,160 @@ class TabuSearch():
 
     def plot_best_evolution(self):
         plt.plot([sol[1] for sol in self.best_solutions])
-        plt.xlabel('Iterations')
+        plt.xlabel('No. accepted solutions')
         plt.ylabel('Cost')
         plt.show()
+    
+    def map_accepted_solutions(self, levels=30, best_evo=True, save_fig=False):
+        if self.D != 2:
+            raise ValueError('Can only map solutions for 2D problems')
         
+        x = [s[0][0] for s in self.solutions]
+        y = [s[0][1] for s in self.solutions]
+        fig, ax = plt.subplots(1, 1, figsize=(9, 6))  
+        x_c, y_c, z_c = contour_xyz(self.f, self.var_bound[0], self.var_bound[1]+0.01,
+                                    res=0.05)
+        cp = ax.contourf(x_c, y_c, z_c, levels=levels)
+        fig.colorbar(cp)
+        ax.scatter(x, y, marker='.', c="orange", label="Accepted solutions")
+        ax.set_title("2-D tabu search on Keane's Bump function", fontsize=18)
+        if best_evo:
+            x_b = [s[0][0] for s in self.best_solutions]
+            y_b = [s[0][1] for s in self.best_solutions]
+            ax.plot(x_b, y_b, color='r', label='Best solution evolution')
+            ax.plot(x_b[0], y_b[0], color='lime', marker='s', 
+                       label='Start')
+            ax.plot(x_b[-1], y_b[-1], color='cyan', marker='*', 
+                       label='Best')
+        ax.legend(loc='upper right')
+        if save_fig:
+            plt.savefig('{}_{}cells.png'.format(str(self.best_obj)[:6], 
+                        self.n_cells))
+        plt.show()
+
+
+def run_multiple_ts(N, f, D, algo_param, log=False):
+    varbound=np.array([[0,10]]*D)
+    best_arr = []
+    
+    for n in range(N):
+        model=TabuSearch(f, D, varbound, n, algo_param)
+        model.run()
+        best = (model.best_x, model.best_obj)
+        best_arr.append(best)
+
+        if log:
+            print(f'Model finished running for random seed = {n}')
+    
+    return best_arr
+
+
+def grid_search_alpha_delta0(alpha_arr, delta0_arr, n_cells, D=8, log=False):
+    varbound=np.array([[0,10]]*D)
+    f = keanes_bump_ts
+    means = np.zeros((len(alpha_arr), len(delta0_arr)))
+
+    for i, alpha in enumerate(alpha_arr):
+        for j, delta0 in enumerate(delta0_arr):
+            if log:
+                print('Starting for alpha={}, delta_0={}'.format(alpha, delta0))
+            
+            algo_param  = {'search_method': 'exhaustive', 
+                            'N': 7,
+                            'M': 4, 
+                            'i_count': 10,
+                            'd_count': 15,
+                            'r_count': 25,
+                            'subset_size': 4,
+                            'prioritisation_period': 10,
+                            'initial_step_size': delta0,
+                            'reduce_factor': alpha,
+                            'n_cells': n_cells}
+            
+            best_arr = run_multiple_ts(50, f, D, algo_param, log=False)
+            mean = np.mean([sol[1] for sol in best_arr])
+            means[i][j] = mean
+
+    return alpha_arr, delta0_arr, means
+
+
+def grid_search_alpha_subset(alpha_arr, subset_arr, n_cells, search_method, D=8, log=False):
+    varbound=np.array([[0,10]]*D)
+    f = keanes_bump_ts
+    means = np.zeros((len(alpha_arr), len(subset_arr)))
+
+    for i, alpha in enumerate(alpha_arr):
+        for j, subset_size in enumerate(subset_arr):
+            if log:
+                print('Starting for alpha={}, subset_size={}'.format(alpha, subset_size))
+            
+            algo_param  = {'search_method': search_method, 
+                            'N': 7,
+                            'M': 4, 
+                            'i_count': 10,
+                            'd_count': 15,
+                            'r_count': 25,
+                            'subset_size': subset_size,
+                            'prioritisation_period': 10,
+                            'initial_step_size': 3,
+                            'reduce_factor': alpha,
+                            'n_cells': n_cells}
+            
+            best_arr = run_multiple_ts(50, f, D, algo_param, log=False)
+            mean = np.mean([sol[1] for sol in best_arr])
+            means[i][j] = mean
+
+    return means
+
+            
+def grid_search_alpha_pri_period(alpha_arr, pp_arr, n_cells, search_method, D=8, log=False):
+    varbound=np.array([[0,10]]*D)
+    f = keanes_bump_ts
+    means = np.zeros((len(alpha_arr), len(pp_arr)))
+
+    for i, alpha in enumerate(alpha_arr):
+        for j, pp in enumerate(pp_arr):
+            if log:
+                print('Starting for alpha={}, prioritisation_period={}'.format(alpha, pp))
+            
+            algo_param  = {'search_method': search_method, 
+                            'N': 7,
+                            'M': 4, 
+                            'i_count': 10,
+                            'd_count': 15,
+                            'r_count': 25,
+                            'subset_size': 4,
+                            'prioritisation_period': pp,
+                            'initial_step_size': 3,
+                            'reduce_factor': alpha,
+                            'n_cells': n_cells}
+            
+            best_arr = run_multiple_ts(50, f, D, algo_param, log=False)
+            mean = np.mean([sol[1] for sol in best_arr])
+            means[i][j] = mean
+
+    return means            
 
 if __name__ == '__main__':
     D=8
     varbound=np.array([[0,10]]*D)
     f = keanes_bump_ts
-    tabu_optimiser = TabuSearch(f, 'random_subset', D, varbound, N=7, M=4, 
-                           intensify=10, diversify=15, reduce=25, subset_size=4, 
-                           prioritisation_period=10, initial_step_size=2, 
-                           reduce_factor=0.8, n_cells=3)
+    algo_param  = {'search_method': 'random_subset', 
+                    'N': 7,
+                    'M': 4, 
+                    'i_count': 10,
+                    'd_count': 15,
+                    'r_count': 25,
+                    'subset_size': 4,
+                    'prioritisation_period': 10,
+                    'initial_step_size': 1,
+                    'reduce_factor': 0.8,
+                    'n_cells': 3}
+    tabu_optimiser = TabuSearch(f, D, varbound, None, algo_param)
     tabu_optimiser.run()
     tabu_optimiser.plot_best_evolution()
-
+    print(tabu_optimiser.best_obj)
+    print(tabu_optimiser.best_x)
+    tabu_optimiser.map_accepted_solutions(save_fig=False)
     
     

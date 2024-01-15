@@ -3,7 +3,7 @@ import sys
 import time
 from func_timeout import func_timeout, FunctionTimedOut
 import matplotlib.pyplot as plt
-from keanes_bump import keanes_bump_ga
+from util import keanes_bump_ga
 
 ###############################################################################
 ###############################################################################
@@ -588,7 +588,7 @@ class geneticalgorithm():
         sys.stdout.flush()
 
 
-def run_multiple(N, algo_param, D, log=False):
+def run_multiple_ga(N, algo_param, D, log=False):
     varbound=np.array([[0,10]]*D)
     opt_arr = []
     res_arr = []
