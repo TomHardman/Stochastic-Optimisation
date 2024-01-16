@@ -185,6 +185,56 @@ class LTM():
 
 
 class TabuSearch():
+    '''
+    Class for implementing a function maximisation via Tabu Search
+
+    Parameters
+    -------------
+    f: function to be optimised
+
+    D: no. dimensions of problem
+
+    var_bound: array like, 2D array of bounds for each variable that
+              defines the search space of form: 
+              [[start_x1, stop_x1], [start_x2, stop_x2]...]
+
+    random_seed: Random seed for seeded runs
+    
+    algo_param - dictionary to contain the following parameters
+        N: no. points to store in short term memory
+
+        M: no. points to store in medium term memory
+
+        i_count: Threshold that needs to be reached for intensification
+
+        d_count: Threshold that needs to be reached for diversification
+
+        r_count: Threshold that needs to be reached for step reduction
+
+        subset_size: Size of subset used during random subset, successive
+                     random subset or variable prioritisation search
+
+        initial_step_size: Initial step size for the search
+
+        reduce_factor: factor to reduce step size by during step reduction
+
+        n_cells : number of discrete cells along each axis used when
+                  discretising the search space in the LTM
+    
+    External Methods
+    ----------------------------
+    run(self):
+        runs the model
+    
+    plot_best_evolution(self):
+        displays plot of the evolution of the best solution 
+        against no. iterations
+    
+    map_accepted_solutions(self, levels=30, best_evo=True, save_fig=False):
+        For use with 2D optimisation only. Display contour map of function 
+        with accepted solutions and evolutions of best solution if best_evo
+        is set to true
+    '''
     def __init__(self, f, D, var_bound, random_seed=None,
                  algo_param = {'search_method': 'exhaustive', 
                               'N': 7,
@@ -336,6 +386,7 @@ class TabuSearch():
         return next_base, next_obj
 
     def search_along_axes(self, base, axes):
+        # searches along axes in 'axes' and returns new base and cost
         best_obj = -np.inf
         best_x = base
         for ax in axes:
@@ -364,9 +415,11 @@ class TabuSearch():
         return best_x, best_obj
 
     def successive_rss(self, base, current_obj):
+        # successive random subset search
         axes_set = set(range(0, self.D))
         best_obj = -np.inf
         
+        # while move does not improve cost and we have remaining axes to search
         while current_obj - best_obj >= 0 and axes_set:
             if len(axes_set) >= self.subset_size:
                 axes = random.sample(list(axes_set), self.subset_size)
@@ -390,7 +443,8 @@ class TabuSearch():
             for ax in axes:
                 delta = np.zeros(self.D)
                 delta[ax] += self.step_size
-                s_i = np.linalg.norm((self.f(base+delta) - self.f(base-delta))/(2 * self.step_size))
+                s_i = np.linalg.norm((self.f(base+delta) - self.f(base-delta))
+                                     /(2 * self.step_size))
                 sensitivities.append(s_i)
             
             sens_ranking = np.argsort(sensitivities)
@@ -400,6 +454,7 @@ class TabuSearch():
         return best_x, best_obj
     
     def initialise_start_point(self):
+        # randomly initialise start point
         start_point = np.zeros(self.D)
         for i in range(self.D):
             lower = self.var_bound[i][0]
@@ -420,7 +475,7 @@ class TabuSearch():
         x = [s[0][0] for s in self.solutions]
         y = [s[0][1] for s in self.solutions]
         fig, ax = plt.subplots(1, 1, figsize=(9, 6))  
-        x_c, y_c, z_c = contour_xyz(self.f, self.var_bound[0], self.var_bound[1]+0.01,
+        x_c, y_c, z_c = contour_xyz(self.var_bound[0], self.var_bound[1]+0.01,
                                     res=0.05)
         cp = ax.contourf(x_c, y_c, z_c, levels=levels)
         fig.colorbar(cp)
@@ -441,107 +496,6 @@ class TabuSearch():
         plt.show()
 
 
-def run_multiple_ts(N, f, D, algo_param, log=False):
-    varbound=np.array([[0,10]]*D)
-    best_arr = []
-    
-    for n in range(N):
-        model=TabuSearch(f, D, varbound, n, algo_param)
-        model.run()
-        best = (model.best_x, model.best_obj)
-        best_arr.append(best)
-
-        if log:
-            print(f'Model finished running for random seed = {n}')
-    
-    return best_arr
-
-
-def grid_search_alpha_delta0(alpha_arr, delta0_arr, n_cells, D=8, log=False):
-    varbound=np.array([[0,10]]*D)
-    f = keanes_bump_ts
-    means = np.zeros((len(alpha_arr), len(delta0_arr)))
-
-    for i, alpha in enumerate(alpha_arr):
-        for j, delta0 in enumerate(delta0_arr):
-            if log:
-                print('Starting for alpha={}, delta_0={}'.format(alpha, delta0))
-            
-            algo_param  = {'search_method': 'exhaustive', 
-                            'N': 7,
-                            'M': 4, 
-                            'i_count': 10,
-                            'd_count': 15,
-                            'r_count': 25,
-                            'subset_size': 4,
-                            'prioritisation_period': 10,
-                            'initial_step_size': delta0,
-                            'reduce_factor': alpha,
-                            'n_cells': n_cells}
-            
-            best_arr = run_multiple_ts(50, f, D, algo_param, log=False)
-            mean = np.mean([sol[1] for sol in best_arr])
-            means[i][j] = mean
-
-    return alpha_arr, delta0_arr, means
-
-
-def grid_search_alpha_subset(alpha_arr, subset_arr, n_cells, search_method, D=8, log=False):
-    varbound=np.array([[0,10]]*D)
-    f = keanes_bump_ts
-    means = np.zeros((len(alpha_arr), len(subset_arr)))
-
-    for i, alpha in enumerate(alpha_arr):
-        for j, subset_size in enumerate(subset_arr):
-            if log:
-                print('Starting for alpha={}, subset_size={}'.format(alpha, subset_size))
-            
-            algo_param  = {'search_method': search_method, 
-                            'N': 7,
-                            'M': 4, 
-                            'i_count': 10,
-                            'd_count': 15,
-                            'r_count': 25,
-                            'subset_size': subset_size,
-                            'prioritisation_period': 10,
-                            'initial_step_size': 3,
-                            'reduce_factor': alpha,
-                            'n_cells': n_cells}
-            
-            best_arr = run_multiple_ts(50, f, D, algo_param, log=False)
-            mean = np.mean([sol[1] for sol in best_arr])
-            means[i][j] = mean
-
-    return means
-
-            
-def grid_search_alpha_pri_period(alpha_arr, pp_arr, n_cells, search_method, D=8, log=False):
-    varbound=np.array([[0,10]]*D)
-    f = keanes_bump_ts
-    means = np.zeros((len(alpha_arr), len(pp_arr)))
-
-    for i, alpha in enumerate(alpha_arr):
-        for j, pp in enumerate(pp_arr):
-            if log:
-                print('Starting for alpha={}, prioritisation_period={}'.format(alpha, pp))
-            
-            algo_param  = {'search_method': search_method, 
-                            'N': 7,
-                            'M': 4, 
-                            'i_count': 10,
-                            'd_count': 15,
-                            'r_count': 25,
-                            'subset_size': 4,
-                            'prioritisation_period': pp,
-                            'initial_step_size': 3,
-                            'reduce_factor': alpha,
-                            'n_cells': n_cells}
-            
-            best_arr = run_multiple_ts(50, f, D, algo_param, log=False)
-            mean = np.mean([sol[1] for sol in best_arr])
-            means[i][j] = mean
-
-    return means            
 
 if __name__ == '__main__':
     D=8
@@ -553,16 +507,17 @@ if __name__ == '__main__':
                     'i_count': 10,
                     'd_count': 15,
                     'r_count': 25,
-                    'subset_size': 4,
-                    'prioritisation_period': 10,
-                    'initial_step_size': 1,
-                    'reduce_factor': 0.8,
-                    'n_cells': 3}
-    tabu_optimiser = TabuSearch(f, D, varbound, None, algo_param)
+                    'subset_size': 3,
+                    'prioritisation_period': 5,
+                    'initial_step_size': 3,
+                    'reduce_factor': 0.94,
+                    'n_cells': 2}
+    tabu_optimiser = TabuSearch(f, D, varbound, 1, algo_param)
     tabu_optimiser.run()
     tabu_optimiser.plot_best_evolution()
     print(tabu_optimiser.best_obj)
     print(tabu_optimiser.best_x)
-    tabu_optimiser.map_accepted_solutions(save_fig=False)
+    #tabu_optimiser.map_accepted_solutions(save_fig=False)
+    plot_region_distribution([sol[0] for sol in tabu_optimiser.solutions], n_cells=3)
     
     

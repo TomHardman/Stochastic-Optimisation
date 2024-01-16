@@ -1,9 +1,13 @@
+'''
+Modified implementation from https://pypi.org/project/geneticalgorithm/
+'''
+
 import numpy as np
 import sys
 import time
 from func_timeout import func_timeout, FunctionTimedOut
 import matplotlib.pyplot as plt
-from util import keanes_bump_ga
+from util import *
 
 ###############################################################################
 ###############################################################################
@@ -41,7 +45,8 @@ class geneticalgorithm():
                                        'max_iteration_without_improv':None,
                                        'selection_method': 'ranking_based_roulette',
                                        'selection_pressure': 1.4,
-                                       'offset': 1},
+                                       'offset': 1,
+                                       'penalty_coeff': 1},
                 random_seed=None,         
                 convergence_curve=True,
                 progress_bar=True,
@@ -96,7 +101,6 @@ class geneticalgorithm():
                                         - 'ranking_based_roulette'
                                         - 'proportional_srs'
                                         - 'ranking_based_srs'
-                                        - 'tournament'
             @ selection_pressure - sets selection pressure - only necessary if
                                     using a ranking based method - must be between
                                     1 and 2
@@ -193,8 +197,8 @@ class geneticalgorithm():
             self.progress_bar=False
         
         # random seed
-        assert(type(random_seed)==int),"random_seed must be type int"
-        if random_seed:
+        if random_seed is not None:
+            assert(type(random_seed)==int),"random_seed must be type int"
             np.random.seed(random_seed)
 
         # input algorithm's parameters
@@ -267,11 +271,14 @@ class geneticalgorithm():
         assert(type(self.offset)==float or type(self.offset)==int)
         assert(self.offset > 0), 'offset must be positive'
 
+        self.penalty_coeff = self.param['penalty_coeff']
+
         
     def run(self):
         # Initial Populations
         self.integers=np.where(self.var_type=='int')
         self.reals=np.where(self.var_type=='real')
+        self.population_mean = 0
         
         var=np.zeros(self.dim) # stores variables for current member of population
         solo=np.zeros(self.dim+1) # acts as copy of var but stores cost in final index
@@ -291,11 +298,15 @@ class geneticalgorithm():
             obj=self.sim(var)            
             solo[self.dim]=obj
             pop[p]=solo.copy()
+
+        # Update mean now initial population has been generated
+        self.population_mean = -np.mean(pop[:, -1])
         #############################################################
 
         #############################################################
         # Report
         self.report=[]
+        self.par_set=[] # stores all selected parents
         self.test_obj=obj
         self.best_variable=var.copy()
         self.best_function=obj
@@ -311,8 +322,9 @@ class geneticalgorithm():
             
             #Sort population by cost function
             pop = pop[pop[:,self.dim].argsort()]
+            self.population_mean = -np.mean(pop[:, -1])
 
-            #If best solution in population is best solution so fars
+            #If best solution in population is best solution so far
             if pop[0,self.dim]<self.best_function:
                 counter=0
                 self.best_function=pop[0,self.dim].copy()
@@ -323,7 +335,6 @@ class geneticalgorithm():
             
             # Report negative of cost - we are solving a maximisation problem
             self.report.append(-pop[0,self.dim])
-
             #############################################################        
             
             # Calculate selection probabilities
@@ -343,7 +354,6 @@ class geneticalgorithm():
                 normobj=maxnorm-normobj+self.offset  # invert so min cost corresponds to highest fitness
                 # offset is added to avoid zero probabilities for least fit members
                 sum_normobj=np.sum(normobj)
-                print(normobj)
                 
                 prob=normobj/sum_normobj
                 cumprob=np.cumsum(prob)
@@ -374,26 +384,35 @@ class geneticalgorithm():
             self.selection_method == 'proportional_srs':
                 int_exp = []  # array to store integer part of expected no. selections for each member
                 remainder = [] # array to store remainder: E(selections) - Int(E(selections))
-                par = [] # array to store parents
+                par=np.array([np.zeros(self.dim+1)]*self.par_s) # array to store parents
+                i = 0
                 
                 for k in range(0,self.num_elit):
-                    par.append(pop[k].copy())  # first add elites
+                    par[i] = pop[k].copy()  # first add elites
+                    i += 1
                 
                 N = self.par_s  - self.num_elit
+
                 for k in range(self.pop_s):
                     int_exp.append(int(N * prob[k]))
                     remainder.append((N*prob[k])%1)
 
-                for k in range(N):
+                for k in range(self.pop_s):
                     for _ in range(int_exp[k]):
-                        par.append(pop[k].copy())
+                        par[i] = pop[k].copy()
+                        i += 1
                 
                 remainder = remainder/np.sum(remainder) # normalise to use as probabilities of remaining selection
-                cum_rem =np.cumsum(remainder)
+                cum_rem = np.cumsum(remainder)
+                current_length = i
 
-                for _ in range(len(par) - self.par_s):
+                for _ in range(self.par_s - current_length):
                     index=np.searchsorted(cum_rem,np.random.random()) # roulette wheel selection
-                    par.append(pop[k].copy())
+                    par[i] = pop[index].copy()
+                    i += 1
+
+            for member in par:
+                self.par_set.append(tuple(member[:-1]))
             
             # Selecting for crossover
             ef_par_list=np.array([False]*self.par_s) # to store parents selected for crossover
@@ -403,7 +422,7 @@ class geneticalgorithm():
                     if np.random.random()<=self.prob_cross:
                         ef_par_list[k]=True
                         par_count+=1
-                
+            
             ef_par=par[ef_par_list].copy()
                     
             #############################################################  
@@ -563,7 +582,8 @@ class geneticalgorithm():
         return x
 ###############################################################################     
     def evaluate(self):
-        return self.f(self.temp)
+        return self.f(self.temp, w=self.penalty_coeff, 
+                      adaptive_mean=self.population_mean)
 ###############################################################################    
     def sim(self,X):
         self.temp=X.copy()
@@ -586,23 +606,48 @@ class geneticalgorithm():
 
         sys.stdout.write('\r%s %s%s %s' % (bar, percents, '%', status))
         sys.stdout.flush()
+###############################################################################
+    def map_accepted_solutions(self, levels=30, best_evo=True, save_fig=False):
+        if len(self.var_bound) != 2:
+            raise ValueError('Can only map solutions for 2D problems')
+        
+        x = [s[0] for s in self.par_set]
+        y = [s[1] for s in self.par_set]
+        fig, ax = plt.subplots(1, 1, figsize=(9, 6))  
+        x_c, y_c, z_c = contour_xyz(self.var_bound[0], self.var_bound[1]+0.01,
+                                    res=0.05)
+        cp = ax.contourf(x_c, y_c, z_c, levels=levels)
+        fig.colorbar(cp)
+        ax.scatter(x, y, marker='.', c="orange", label="Selected Parents")
+        ax.set_title("2-D genetic algorithm on Keane's Bump function", fontsize=18)
+        ax.legend(loc='upper right')
+        plt.show()
 
 
-def run_multiple_ga(N, algo_param, D, log=False):
+
+
+
+if __name__ == '__main__':
+    algo_param={'max_num_iteration': 10000,
+                'population_size':100,
+                'mutation_probability':0.1,
+                'elit_ratio': 0.02,
+                'crossover_probability': 0.6,
+                'parents_portion': 0.5,
+                'crossover_type':'uniform',
+                'max_iteration_without_improv':None,
+                'selection_method': 'ranking_based_srs',
+                'selection_pressure': 1.5,
+                'offset': 0.5,
+                'penalty_coeff': 1}
+    D = 8
     varbound=np.array([[0,10]]*D)
-    opt_arr = []
-    res_arr = []
+    model = geneticalgorithm(function=keanes_bump_ga, dimension=D, variable_type='real',
+                             variable_boundaries=varbound, algorithm_parameters=algo_param, 
+                             random_seed=11, progress_bar=False, convergence_curve=True)
+    model.run()
+    print(model.output_dict)
+    print(len(model.par_set))
+    plot_region_distribution(model.par_set, n_cells=3, algo_name='Genetic Algorithm')
+    #model.map_accepted_solutions()
     
-    for n in range(N):
-        model=geneticalgorithm(function=keanes_bump_ga, dimension=D, variable_type='real',
-                               variable_boundaries=varbound, algorithm_parameters=algo_param, 
-                               random_seed=n, progress_bar=False, convergence_curve=False)
-        model.run()
-        opt = model.output_dict
-        res = model.report
-        opt_arr.append(opt)
-        res_arr.append(res)
-        if log:
-            print(f'Model finished running for random seed = {n}')
-    
-    return opt_arr, res_arr

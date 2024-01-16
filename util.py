@@ -1,12 +1,14 @@
 import numpy as np
 from matplotlib import cm
 from matplotlib.ticker import LinearLocator
+from collections import defaultdict
 import matplotlib.pyplot as plt
 
 
-def keanes_bump_ga(x, n_iter=1, w=1, k=2, penalty=True):
+def keanes_bump_ga(x, w=1e10, adaptive_mean=None, penalty=True):
     '''
-    Keane's Bump function to be maximised
+    Keane's Bump function to be maximised with
+    elitist GA
     '''
     n = len(x)
     cos_4_sum = np.sum(np.cos(x)**4)
@@ -18,7 +20,11 @@ def keanes_bump_ga(x, n_iter=1, w=1, k=2, penalty=True):
 
     # Add penalties for broken constraints
     pen = 0
-    coeff = n_iter ** k * w
+    coeff = w
+
+    if adaptive_mean is not None:
+        if not valid(x) and cost > adaptive_mean:
+            cost = adaptive_mean
     
     if penalty:
         for i in range(n):
@@ -32,7 +38,8 @@ def keanes_bump_ga(x, n_iter=1, w=1, k=2, penalty=True):
 
 def keanes_bump_ts(x, w=1e8, penalty=True):
     '''
-    Keane's Bump function to be maximised
+    Keane's Bump function to be maximised with 
+    Tabu Search
     '''
     n = len(x)
     cos_4_sum = np.sum(np.cos(x)**4)
@@ -55,7 +62,12 @@ def keanes_bump_ts(x, w=1e8, penalty=True):
     return (cost + pen)
 
 
-def contour_xyz(f, x_range, y_range, res=0.1):
+def contour_xyz(x_range, y_range, res=0.1):
+    '''
+    Takes a range of x and y values and returns x, y
+    and z in the form to be taken by the matplotlib
+    contourf function.
+    '''
     x_contour = np.arange(x_range[0], x_range[1], res)
     y_contour = np.arange(y_range[0], y_range[1], res)
     x_mesh, y_mesh = np.meshgrid(x_contour, y_contour)
@@ -66,17 +78,36 @@ def contour_xyz(f, x_range, y_range, res=0.1):
             if not valid(xy_mesh[i][j]):
                 z[i][j] = -0.5
             else:
-                z[i][j] = f(xy_mesh[i][j])
+                z[i][j] = keanes_bump_ts(xy_mesh[i][j])
     return x_mesh, y_mesh, z
 
 
-def contour_plot_gs(x_mesh, y_mesh, means):
-    fig, ax = plt.subplots(1, 1, figsize=(9, 6))
-    cp = ax.contourf(x_mesh, y_mesh, means, levels=10)
-    best_mean = np.max(means)
-    x_i, y_i = np.where(means == best_mean)
-    ax.scatter  
+def plot_region_distribution(solutions, n_cells=3, algo_name='Tabu Search'):
+    '''
+    Function that displays a frequency plot of the regions visited
+    by an algorithm
+    '''
+    region_counts = defaultdict(int)
 
+    for x in solutions:
+        grid_coord = np.zeros(len(x))
+        for i, var in enumerate(x):
+            start, stop = 0, 10
+            grid_spacing = np.linspace(start, stop, n_cells+1)
+            grid_coord[i] = np.searchsorted(grid_spacing, var)
+        region_counts[tuple(grid_coord)] += 1
+    
+    counts = sorted(region_counts.values())
+    fig, ax = plt.subplots()
+    x_pos = np.linspace(0, len(counts), len(counts))
+    ax.bar(x_pos,counts, width=0.9)
+    ax.set_yscale('log')
+    ax.set_title('{}: {}/{} cells used for parent selection'.format(algo_name,
+                                                               len(counts), 
+                                                               int(n_cells**8)))
+    ax.set_ylabel('Frequency of Parent Selections')
+    plt.show()
+    
 
 def valid(x):
     for i in range(len(x)):
